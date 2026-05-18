@@ -187,13 +187,81 @@ def delete_user(username: str, db: Session = Depends(get_db)):
 
 
 @app.post("/api/admin/reset")
-def reset_all(db: Session = Depends(get_db)):
+def reset_data(req: schemas.AdminRequest, db: Session = Depends(get_db)):
+    if req.password != "SmartAdapter123":
+        raise HTTPException(status_code=403, detail="WRONG_PASSWORD")
+
+    now = int(time.time())
+    six_months_ago = now - (6 * 30 * 24 * 3600)
+    cycle_id = str(now)
+
+    # Archive current sessions per user into billing history
+    users = db.query(models.User).all()
+    for u in users:
+        sessions = db.query(models.Session).filter(models.Session.user_id == u.username).all()
+        if sessions:
+            db.add(models.BillingHistory(
+                cycle_id=cycle_id,
+                archived_at=now,
+                user_id=u.username,
+                kwh=round(sum(s.kwh for s in sessions), 4),
+                cost_php=round(sum(s.cost_php for s in sessions), 2),
+                session_count=len(sessions),
+                period_start=min(s.start_time for s in sessions),
+                period_end=max(s.end_time for s in sessions),
+            ))
+
+    # Auto-purge history older than 6 months
+    db.query(models.BillingHistory).filter(
+        models.BillingHistory.archived_at < six_months_ago
+    ).delete()
+
+    # Clear current cycle data
     db.query(models.Session).delete()
     db.query(models.EnergyReading).delete()
     db.query(models.DevicePairing).delete()
-    db.query(models.User).delete()
+    if req.clear_users:
+        db.query(models.User).delete()
+
     db.commit()
-    return {"message": "All data cleared"}
+    return {"message": "Reset complete", "cycle_id": cycle_id}
+
+
+@app.get("/api/history")
+def get_history(me: models.User = Depends(current_user), db: Session = Depends(get_db)):
+    six_months_ago = int(time.time()) - (6 * 30 * 24 * 3600)
+    records = (
+        db.query(models.BillingHistory)
+        .filter(models.BillingHistory.archived_at >= six_months_ago)
+        .order_by(desc(models.BillingHistory.archived_at))
+        .all()
+    )
+    cycles: dict = {}
+    for r in records:
+        if r.cycle_id not in cycles:
+            cycles[r.cycle_id] = {
+                "cycle_id": r.cycle_id,
+                "archived_at": r.archived_at,
+                "users": [],
+            }
+        cycles[r.cycle_id]["users"].append({
+            "user_id": r.user_id,
+            "kwh": r.kwh,
+            "cost_php": r.cost_php,
+            "session_count": r.session_count,
+            "period_start": r.period_start,
+            "period_end": r.period_end,
+        })
+    return list(cycles.values())
+
+
+@app.delete("/api/admin/clear-history")
+def clear_history(req: schemas.AdminRequest, db: Session = Depends(get_db)):
+    if req.password != "SmartAdapter123":
+        raise HTTPException(status_code=403, detail="WRONG_PASSWORD")
+    db.query(models.BillingHistory).delete()
+    db.commit()
+    return {"message": "History cleared"}
 
 
 @app.get("/api/sessions/history")

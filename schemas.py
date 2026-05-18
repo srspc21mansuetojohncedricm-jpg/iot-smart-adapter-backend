@@ -50,3 +50,8 @@ class LiveReading(BaseModel):
     volts: float
     amps: float
     user_id: Optional[str] = None
+
+
+class AdminRequest(BaseModel):
+    password: str
+    clear_users: bool = False
