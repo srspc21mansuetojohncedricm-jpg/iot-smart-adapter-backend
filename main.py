@@ -138,11 +138,14 @@ def consumption(me: models.User = Depends(current_user), db: Session = Depends(g
     now = int(time.time())
     active_threshold = now - 120  # reading within last 2 min = active session
 
+    # Device posts g_total_kwh (all-time cumulative). To get current session kWh:
+    # current_session_kwh = device_total - sum(all completed sessions ever posted)
+    all_sessions_kwh = db.query(func.sum(models.Session.kwh)).scalar() or 0.0
+
     result = {}
     for u in users:
         total = db.query(func.sum(models.Session.kwh)).filter(models.Session.user_id == u.username).scalar() or 0.0
 
-        # Add running kWh from any active (not yet ended) session
         latest_reading = (
             db.query(models.EnergyReading)
             .filter(models.EnergyReading.user_id == u.username)
@@ -156,9 +159,9 @@ def consumption(me: models.User = Depends(current_user), db: Session = Depends(g
                 .order_by(desc(models.Session.end_time))
                 .first()
             )
-            # Only add if the reading is newer than the last completed session
             if latest_session is None or latest_reading.timestamp > latest_session.end_time:
-                total += latest_reading.kwh
+                current_session_kwh = max(0.0, latest_reading.kwh - all_sessions_kwh)
+                total += current_session_kwh
 
         result[u.username] = round(total, 4)
     return result
@@ -168,6 +171,29 @@ def consumption(me: models.User = Depends(current_user), db: Session = Depends(g
 def list_users(me: models.User = Depends(current_user), db: Session = Depends(get_db)):
     users = db.query(models.User).order_by(models.User.created_at).all()
     return [u.username for u in users]
+
+
+@app.delete("/api/admin/delete-user/{username}")
+def delete_user(username: str, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    db.query(models.DevicePairing).filter(models.DevicePairing.username == username).delete()
+    db.query(models.Session).filter(models.Session.user_id == username).delete()
+    db.query(models.EnergyReading).filter(models.EnergyReading.user_id == username).delete()
+    db.delete(user)
+    db.commit()
+    return {"message": f"User '{username}' deleted"}
+
+
+@app.post("/api/admin/reset")
+def reset_all(db: Session = Depends(get_db)):
+    db.query(models.Session).delete()
+    db.query(models.EnergyReading).delete()
+    db.query(models.DevicePairing).delete()
+    db.query(models.User).delete()
+    db.commit()
+    return {"message": "All data cleared"}
 
 
 @app.get("/api/sessions/history")
