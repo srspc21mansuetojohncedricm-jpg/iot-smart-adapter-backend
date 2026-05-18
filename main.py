@@ -135,9 +135,31 @@ def live_reading(room_id: str, db: Session = Depends(get_db)):
 @app.get("/api/consumption")
 def consumption(me: models.User = Depends(current_user), db: Session = Depends(get_db)):
     users = db.query(models.User).order_by(models.User.created_at).all()
+    now = int(time.time())
+    active_threshold = now - 120  # reading within last 2 min = active session
+
     result = {}
     for u in users:
         total = db.query(func.sum(models.Session.kwh)).filter(models.Session.user_id == u.username).scalar() or 0.0
+
+        # Add running kWh from any active (not yet ended) session
+        latest_reading = (
+            db.query(models.EnergyReading)
+            .filter(models.EnergyReading.user_id == u.username)
+            .order_by(desc(models.EnergyReading.timestamp))
+            .first()
+        )
+        if latest_reading and latest_reading.timestamp >= active_threshold:
+            latest_session = (
+                db.query(models.Session)
+                .filter(models.Session.user_id == u.username)
+                .order_by(desc(models.Session.end_time))
+                .first()
+            )
+            # Only add if the reading is newer than the last completed session
+            if latest_session is None or latest_reading.timestamp > latest_session.end_time:
+                total += latest_reading.kwh
+
         result[u.username] = round(total, 4)
     return result
 
