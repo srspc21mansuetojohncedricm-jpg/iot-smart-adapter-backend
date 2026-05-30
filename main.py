@@ -107,9 +107,13 @@ def receive_energy(data: schemas.EnergyPost, db: Session = Depends(get_db)):
 
 @app.post("/api/sessions")
 def receive_session(data: schemas.SessionPost, db: Session = Depends(get_db)):
-    session = models.Session(**data.dict())
-    db.add(session)
-    db.commit()
+    exists = db.query(models.Session).filter(
+        models.Session.user_id == data.user_id,
+        models.Session.start_time == data.start_time,
+    ).first()
+    if not exists:
+        db.add(models.Session(**data.dict()))
+        db.commit()
     return {"status": "ok"}
 
 
