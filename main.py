@@ -95,9 +95,13 @@ def paired_device(me: models.User = Depends(current_user), db: Session = Depends
 
 @app.post("/api/energy")
 def receive_energy(data: schemas.EnergyPost, db: Session = Depends(get_db)):
-    reading = models.EnergyReading(**data.dict())
-    db.add(reading)
-    db.commit()
+    exists = db.query(models.EnergyReading).filter(
+        models.EnergyReading.room_id == data.room_id,
+        models.EnergyReading.timestamp == data.timestamp,
+    ).first()
+    if not exists:
+        db.add(models.EnergyReading(**data.dict()))
+        db.commit()
     return {"status": "ok"}
 
 
